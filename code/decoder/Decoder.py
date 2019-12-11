@@ -158,7 +158,19 @@ class Decoder(object):
 
     def viterbi(self, fea):
 
+        # hmm_nodes0 <- hmm_nodes1
+        self.nodes0 = []
+        # From the worst to the best node, reversed
+        while(len(self.hmm_nodes1_heap) != 0):
+            self.nodes0.append(heapq.heappop(self.hmm_nodes1_heap))
+
         nodes0 = self.hmm_nodes0
+        self.hmm_nodes1 = []
+        self.hmm_actives = {}
+        #self.hmm_nodes1_heap should be empty 
+        assert(len(self.hmm_nodes1_heap) == 0)
+
+
         self.actives = [-1] * self.sg.nstates
         #logging.debug("Inside viterbi_iter")
         while len(nodes0) != 0:
@@ -284,6 +296,11 @@ class Decoder(object):
             
             logging.debug("New node")
 
+            if prob > self.v_max:
+                self.v_max = prob
+                self.v_thr = prob - self.v_abeam
+                self.v_maxh = hmmnode.hyp
+
             if not full:
                 logging.debug("Nodes is not full")
                 hmm_nodes1.append(hmmnode)
@@ -332,7 +349,7 @@ class Decoder(object):
 
 
         else: #Old node, should we update its value?
-
+            
             logging.debug("Node is already inside")
             cur_node = hmm_nodes1[pos]
             
@@ -342,6 +359,11 @@ class Decoder(object):
                 return
 
             else:
+
+                if prob > self.v_max:
+                    self.v_max = prob
+                    self.v_thr = prob - self.v_abeam
+                    self.v_maxh = hmmnode.hyp
 
                 logging.debug("It is better than the old node, replacing...")
                 cur_node.p = prob
@@ -402,9 +424,23 @@ class Decoder(object):
     def decode(self, fea):
         
         
+        fprob = 0.0
+
         self.viterbi_init(fea.sample[:,0])
 
+        fprob += self.v_max
+
+        logging.debug("Fprob: {}".format(fprob))
+        
+
+        # Apply adaptative beam?
+
+
         t_max = fea.sample.shape[1]
+
+        t_fea = fea.sample[:,1]
+
+        self.viterbi(t_fea)
 
         #for i in range(1,t_max):
         #for i in range(1,100):
@@ -416,7 +452,8 @@ class Decoder(object):
 
 if __name__=="__main__":
 
-   logging.basicConfig(level=logging.DEBUG)
+   #logging.basicConfig(filename='deco.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+   logging.basicConfig(filename='deco.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
    import pickle
    amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
