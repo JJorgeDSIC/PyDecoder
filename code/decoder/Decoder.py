@@ -4,6 +4,10 @@ from models.SGraphModel import SGraphModel
 import heapq
 import logging
 
+def print_lst(lst):
+
+    logging.info("\n".join([str(x) for x in lst]))
+
 class Decoder(object):
 
     class TrellisSGNode(object):
@@ -38,7 +42,7 @@ class Decoder(object):
 
         def __str__(self):
 
-            return "S: {}, Q: {}, ID: {}, P: {:.5f}".format(self.s, self.q, self.id, self.p)
+            return "S: {}, Q: {}, ID: {}, P: {:.5f} HMMP: {:.5f}".format(self.s, self.q, self.id, self.p, self.hmmp)
 
 
     def __init__(self, amodel, sg):
@@ -54,7 +58,7 @@ class Decoder(object):
         self.hmm_nodes0 = []
         self.hmm_nodes1 = []
         self.hmm_actives = {}
-        
+        self.beam = 2**10
         self.v_max = -2**10
         self.v_thr = -2**10
         self.v_lm_max = -2**10
@@ -67,7 +71,6 @@ class Decoder(object):
         self.WIP = 0.0
         self.final_iter = False
         self.hmm_nodes1_heap = []
-        self.heap_initialized = False
         self.nmaxhyp = 20
 
         # Enums
@@ -103,7 +106,7 @@ class Decoder(object):
                 s = sg.edges_dst[pos]
                 p = current_p + sg.edges_weight[pos] * self.GSF + self.WIP
                 lmp = current_lmp + sg.edges_weight[pos]
-                sgnode = self.TrellisSGNode(s, p, lmp, 0, None, None)
+                sgnode = self.TrellisSGNode(s, p, 0, lmp, None, None)
                 #logging.debug(sgnode)
                 self.insert_sg_node(sgnode)
         
@@ -139,16 +142,25 @@ class Decoder(object):
             hmmnode = self.TrellisHMMNode(node.s, 0, node.p, node.hmmp, node.lmp, node.lm_state, node.hyp)
             self.insert_hmm_node(hmmnode, fea)
 
-        for node in self.hmm_nodes1:
-            if node != None:
-                self.hmm_nodes0.append(node)
-    
+
+
+        # hmm_nodes0 <- hmm_nodes1
+        self.hmm_nodes0 = []
+        
+        #print(len(self.hmm_nodes1_heap))
+        # From the worst to the best node, reversed
+        while(len(self.hmm_nodes1_heap) != 0):
+            prob, pos = heapq.heappop(self.hmm_nodes1_heap)
+            #print(self.hmm_nodes1[pos])
+            self.hmm_nodes0.append(self.hmm_nodes1[pos])
+
+
+        #self.hmm_nodes1_heap should be empty 
+        assert(len(self.hmm_nodes1_heap) == 0)
+        
         self.hmm_nodes1 = []
-
         self.hmm_nodes1_heap = []
-        self.heap_initialized = False
         self.hmm_actives = {}
-
         #logging.debug("\n".join([str(x) for x in self.hmm_nodes0]))
    
         self.actives = [-1] * self.sg.nstates
@@ -158,49 +170,64 @@ class Decoder(object):
 
     def viterbi(self, fea):
 
-        # hmm_nodes0 <- hmm_nodes1
-        self.nodes0 = []
-        # From the worst to the best node, reversed
-        while(len(self.hmm_nodes1_heap) != 0):
-            self.nodes0.append(heapq.heappop(self.hmm_nodes1_heap))
+        logging.info("Before iter - Nodes0: ")
+        print_lst(self.hmm_nodes0)
 
         nodes0 = self.hmm_nodes0
-        self.hmm_nodes1 = []
-        self.hmm_actives = {}
-        #self.hmm_nodes1_heap should be empty 
-        assert(len(self.hmm_nodes1_heap) == 0)
 
+        old_max = self.v_max
+        old_thr = self.v_thr
+        self.v_max = -2**10
+        self.v_thr = -2**10
+        self.v_lm_max = -2**10
+        self.v_lm_thr = -2**10
+        self.v_abeam = self.beam
+        logging.info("old_max: {}, old_thr: {}".format(old_max, old_thr))
 
         self.actives = [-1] * self.sg.nstates
         #logging.debug("Inside viterbi_iter")
         while len(nodes0) != 0:
 
             node = nodes0.pop()
+            logging.info(node)
+
+            if node.p < old_thr:
+                logging.info("Pruned!")
+                continue
+            
+            node.p -= old_max
+            logging.info(node)
 
             isfinal = False
             #TrellisHMMNode node
             sym = self.sg.get_state_info(node.s)[1]
+            """
             auxp = amodel.compute_gmm_emission_prob(fea, sym, node.q)
             #logging.debug(auxp)
             node.p+=auxp
             node.hmmp+=auxp
-
+            """
             p1_trans = amodel.get_transitions(sym,node.q)
             # This could be precomputed beforehand when loading the model...
             p0_trans = np.log(1  - np.exp(p1_trans))
+            logging.info("p0_trans: {}, p1_trans: {}".format(p0_trans, p1_trans))
 
             #logging.debug(p0_trans)
             #logging.debug(p1_trans)
             current_p = node.p
             current_hmmp = node.hmmp
-
+            logging.info("current_p: {}, current_hmmp: {}".format(current_p, current_hmmp))
             #Staying in the same state
-            hmmnode = self.TrellisHMMNode(node.s, node.q, current_p + p0_trans, current_hmmp + + p0_trans, node.lmp, node.lm_state, node.hyp)
+            hmmnode = self.TrellisHMMNode(node.s, node.q, current_p + p0_trans, current_hmmp + p0_trans, node.lmp, node.lm_state, node.hyp)
+            logging.info("p0 trans: {}".format(hmmnode))
+            logging.info("inserting: {}".format(hmmnode))
             self.insert_hmm_node(hmmnode, fea)
 
             if node.q + 1 < amodel.trans_dict[sym].num_hmm_states:
                 #Jumping to the following state
-                hmmnode = self.TrellisHMMNode(node.s, node.q + 1, current_p + p1_trans, current_hmmp + + p1_trans, node.lmp, node.lm_state, node.hyp)
+                hmmnode = self.TrellisHMMNode(node.s, node.q + 1, current_p + p1_trans, current_hmmp + p1_trans, node.lmp, node.lm_state, node.hyp)
+                logging.info("p1 trans: {}".format(hmmnode))
+                logging.info("inserting: {}".format(hmmnode))
                 self.insert_hmm_node(hmmnode, fea) # from 0->1, 1->2
 
             else: #from 2-> outside
@@ -209,7 +236,7 @@ class Decoder(object):
             if isfinal:
                 sgnode = self.TrellisSGNode(node.s, node.p, node.hmmp, node.lmp, None, None)
                 self.insert_sg_node(sgnode)
-
+            logging.info("================")
         #logging.debug([str(x) for x in self.hmm_nodes1])
         
         # At this point, there could be nodes in sg_null_nodes1 and sg_nodes1
@@ -237,16 +264,28 @@ class Decoder(object):
             hmmnode = self.TrellisHMMNode(node.s, 0, node.p, node.hmmp, node.lmp, node.lm_state, node.hyp)
             self.insert_hmm_node(hmmnode, fea)
 
-        for node in self.hmm_nodes1:
-            if node != None:
-                self.hmm_nodes0.append(node)
-    
+        # hmm_nodes0 <- hmm_nodes1
+        self.hmm_nodes0 = []
+        
+        # From the worst to the best node, reversed
+        while(len(self.hmm_nodes1_heap) != 0):
+            prob, pos = heapq.heappop(self.hmm_nodes1_heap)
+            #print(self.hmm_nodes1[pos])
+            self.hmm_nodes0.append(self.hmm_nodes1[pos])
+
+        
+        #self.hmm_nodes1_heap should be empty 
+        assert(len(self.hmm_nodes1_heap) == 0)
+
         self.hmm_nodes1 = []
-
         self.hmm_nodes1_heap = []
-        self.heap_initialized = False
-
         self.hmm_actives = {}
+
+        logging.info("After iter - Nodes0: ")
+        print_lst(self.hmm_nodes0)
+        #logging.debug("\n".join([str(x) for x in self.hmm_nodes0]))
+   
+        self.actives = [-1] * self.sg.nstates
 
     def heap_push(self, min_heap, node_id, mode):
     
@@ -264,14 +303,16 @@ class Decoder(object):
           heapq.heappush(min_heap, node_id)
           return 
 
-
     def insert_hmm_node(self, hmmnode, fea):
         
         sym = self.sg.get_state_info(hmmnode.s)[1] # (state_id, symbol, word, edges_begin, edges_end)
         # Pruning could be done after or before getting the emission score
-        auxp = amodel.compute_gmm_emission_prob(fea, sym, 0)
+        auxp = amodel.compute_gmm_emission_prob(fea, sym, hmmnode.q)
         prob = hmmnode.p + auxp # In which case this could be HUGE_VAL in the C implementation?
+        hmmnode.p = prob
+        hmmnode.hmmp += auxp
         
+        logging.info("after emitting: {}".format(hmmnode))
         hmm_actives = self.hmm_actives
         hmm_nodes1 = self.hmm_nodes1
         hmm_nodes1_heap = self.hmm_nodes1_heap
@@ -289,9 +330,9 @@ class Decoder(object):
             logging.debug("Node: {}, prob:{} min_prob: {}".format(hmmnode, prob, hmm_nodes1_heap[0][0]))
             return
         
-
+        
         pos = hmm_actives.get(hmmnode.id, -1)
-
+        
         if pos == -1: #New node
             
             logging.debug("New node")
@@ -352,6 +393,13 @@ class Decoder(object):
             
             logging.debug("Node is already inside")
             cur_node = hmm_nodes1[pos]
+
+            logging.info("After")
+            logging.info("\n".join([str(x) for x in hmm_nodes1]))
+            logging.info("*****")
+            logging.info("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
+            logging.info("*****")
+            logging.info("\n".join([str(x) for x in hmm_nodes1_heap]))
             
             if cur_node.p > prob:
 
@@ -361,6 +409,7 @@ class Decoder(object):
             else:
 
                 if prob > self.v_max:
+                    
                     self.v_max = prob
                     self.v_thr = prob - self.v_abeam
                     self.v_maxh = hmmnode.hyp
@@ -370,10 +419,6 @@ class Decoder(object):
                 cur_node.hmmp = hmmnode.hmmp
                 self.heap_push(hmm_nodes1_heap, (cur_node.p, pos), self.UPDATE)
                 #heapq.heappush(hmm_nodes1_heap, (node.p, pos))        
-
-
-
-
 
     def insert_sg_node(self, node):
 
@@ -453,7 +498,7 @@ class Decoder(object):
 if __name__=="__main__":
 
    #logging.basicConfig(filename='deco.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
-   logging.basicConfig(filename='deco.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+   logging.basicConfig(filename='deco.info.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
    import pickle
    amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
