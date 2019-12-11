@@ -2,6 +2,7 @@ import numpy as np
 from models.AModel import AModel
 from models.SGraphModel import SGraphModel
 import heapq
+import logging
 
 class Decoder(object):
 
@@ -76,13 +77,13 @@ class Decoder(object):
 
     def expand_sg_nodes(self, node_lst):
         
-        print("Expanding nodes:")
+        logging.debug("Expanding nodes:")
 
         while len(node_lst) != 0:
 
             node = node_lst.pop()
             sg_state = self.sg.get_state_info(node.s)
-            #print(sg_state)
+            #logging.debug(sg_state)
 
             if sg_state[1] != '-':
                 self.hypothesis.append(sg_state[1])
@@ -94,7 +95,7 @@ class Decoder(object):
             edges_end = sg.edges_end[prev_s]
 
             for pos in range(edges_begin, edges_end):
-                #print("Dst:{}".format(sg.edges_dst[pos]))
+                #logging.debug("Dst:{}".format(sg.edges_dst[pos]))
                 if not self.final_iter:
                     if sg.edges_dst[pos] == sg.final:
                         continue
@@ -103,7 +104,7 @@ class Decoder(object):
                 p = current_p + sg.edges_weight[pos] * self.GSF + self.WIP
                 lmp = current_lmp + sg.edges_weight[pos]
                 sgnode = self.TrellisSGNode(s, p, lmp, 0, None, None)
-                #print(sgnode)
+                #logging.debug(sgnode)
                 self.insert_sg_node(sgnode)
         
         self.sg_null_nodes0 = self.sg_null_nodes1
@@ -126,15 +127,15 @@ class Decoder(object):
         self.sg_nodes0 = self.sg_nodes1.copy()
 
         self.sg_nodes1 = []
-        #print("Nodes0 list:")
-        #print("\n".join([str(x) for x in self.sg_nodes0]))
-        #print("Nodes1 list:")
-        #print("\n".join([str(x) for x in self.sg_nodes1]))
+        #logging.debug("Nodes0 list:")
+        #logging.debug("\n".join([str(x) for x in self.sg_nodes0]))
+        #logging.debug("Nodes1 list:")
+        #logging.debug("\n".join([str(x) for x in self.sg_nodes1]))
         
         # From SG nodes to HMM nodes
         for node in self.sg_nodes0:
-            #print(node)
-            #print(self.sg.get_state_info(node.s))
+            #logging.debug(node)
+            #logging.debug(self.sg.get_state_info(node.s))
             hmmnode = self.TrellisHMMNode(node.s, 0, node.p, node.hmmp, node.lmp, node.lm_state, node.hyp)
             self.insert_hmm_node(hmmnode, fea)
 
@@ -148,18 +149,18 @@ class Decoder(object):
         self.heap_initialized = False
         self.hmm_actives = {}
 
-        #print("\n".join([str(x) for x in self.hmm_nodes0]))
+        #logging.debug("\n".join([str(x) for x in self.hmm_nodes0]))
    
         self.actives = [-1] * self.sg.nstates
 
-        print("Init completed...")
+        logging.debug("Init completed...")
  
 
     def viterbi(self, fea):
 
         nodes0 = self.hmm_nodes0
         self.actives = [-1] * self.sg.nstates
-        #print("Inside viterbi_iter")
+        #logging.debug("Inside viterbi_iter")
         while len(nodes0) != 0:
 
             node = nodes0.pop()
@@ -168,7 +169,7 @@ class Decoder(object):
             #TrellisHMMNode node
             sym = self.sg.get_state_info(node.s)[1]
             auxp = amodel.compute_gmm_emission_prob(fea, sym, node.q)
-            #print(auxp)
+            #logging.debug(auxp)
             node.p+=auxp
             node.hmmp+=auxp
 
@@ -176,8 +177,8 @@ class Decoder(object):
             # This could be precomputed beforehand when loading the model...
             p0_trans = np.log(1  - np.exp(p1_trans))
 
-            #print(p0_trans)
-            #print(p1_trans)
+            #logging.debug(p0_trans)
+            #logging.debug(p1_trans)
             current_p = node.p
             current_hmmp = node.hmmp
 
@@ -197,7 +198,7 @@ class Decoder(object):
                 sgnode = self.TrellisSGNode(node.s, node.p, node.hmmp, node.lmp, None, None)
                 self.insert_sg_node(sgnode)
 
-        #print([str(x) for x in self.hmm_nodes1])
+        #logging.debug([str(x) for x in self.hmm_nodes1])
         
         # At this point, there could be nodes in sg_null_nodes1 and sg_nodes1
         # We should performe sg_null_nodes0 -> sg_nodes0 (viterbi_iter_sg)
@@ -209,15 +210,15 @@ class Decoder(object):
     
         while len(self.sg_null_nodes0) != 0:
             self.expand_sg_nodes(self.sg_null_nodes0)
-            #print(self.sg_null_nodes0)
+            #logging.debug(self.sg_null_nodes0)
 
         self.sg_nodes0 = self.sg_nodes1.copy()
 
         self.sg_nodes1 = []
-        #print("Nodes0 list:")
-        #print("\n".join([str(x) for x in self.sg_nodes0]))
-        #print("Nodes1 list:")
-        #print("\n".join([str(x) for x in self.sg_nodes1]))
+        #logging.debug("Nodes0 list:")
+        #logging.debug("\n".join([str(x) for x in self.sg_nodes0]))
+        #logging.debug("Nodes1 list:")
+        #logging.debug("\n".join([str(x) for x in self.sg_nodes1]))
 
         # From SG nodes to HMM nodes
         for node in self.sg_nodes0:
@@ -245,7 +246,7 @@ class Decoder(object):
           #Workaround to not implement my own heap...      
           for i,n in enumerate(min_heap):
               if n[1] == node_id[1]:
-                  print("Found: {}".format(n))
+                  logging.debug("Found: {}".format(n))
                   min_heap.pop(i)
 
           heapq.heappush(min_heap, node_id)
@@ -264,16 +265,16 @@ class Decoder(object):
         hmm_nodes1_heap = self.hmm_nodes1_heap
 
         if prob < self.v_thr:
-            print("Pruned by v_thr")
-            print("Node: {}, prob:{} v_thr: {}".format(hmmnode, prob, self.v_thr))
+            logging.debug("Pruned by v_thr")
+            logging.debug("Node: {}, prob:{} v_thr: {}".format(hmmnode, prob, self.v_thr))
             return
 
         full = len(hmm_nodes1_heap) == self.nmaxhyp
 
         # If this hyp. is worse than the worst, we will prune it
         if full and prob <= hmm_nodes1_heap[0][0]:
-            print("Pruned by min_heap")
-            print("Node: {}, prob:{} min_prob: {}".format(hmmnode, prob, hmm_nodes1_heap[0][0]))
+            logging.debug("Pruned by min_heap")
+            logging.debug("Node: {}, prob:{} min_prob: {}".format(hmmnode, prob, hmm_nodes1_heap[0][0]))
             return
         
 
@@ -281,32 +282,32 @@ class Decoder(object):
 
         if pos == -1: #New node
             
-            print("New node")
+            logging.debug("New node")
 
             if not full:
-                print("Nodes is not full")
+                logging.debug("Nodes is not full")
                 hmm_nodes1.append(hmmnode)
                 cur_pos = len(hmm_nodes1) - 1
 
                 self.heap_push(hmm_nodes1_heap, (prob, cur_pos), self.NEW)
             
                 hmm_actives[hmmnode.id] = cur_pos  
-                print("\n".join([str(x) for x in hmm_nodes1]))
-                print("*****")
-                print("\n".join([str(x) for x in hmm_actives]))
-                print("*****")            
-                print("\n".join([str(x) for x in hmm_nodes1_heap]))          
-                print("=====")
+                logging.debug("\n".join([str(x) for x in hmm_nodes1]))
+                logging.debug("*****")
+                logging.debug("\n".join([str(x) for x in hmm_actives]))
+                logging.debug("*****")            
+                logging.debug("\n".join([str(x) for x in hmm_nodes1_heap]))          
+                logging.debug("=====")
 
             else:
-                print("Nodes is full")
-                print("Before")
-                print("\n".join([str(x) for x in hmm_nodes1]))
-                print("*****")
-                print("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
-                print("*****")
-                print("\n".join([str(x) for x in hmm_nodes1_heap]))
-                print("=====")
+                logging.debug("Nodes is full")
+                logging.debug("Before")
+                logging.debug("\n".join([str(x) for x in hmm_nodes1]))
+                logging.debug("*****")
+                logging.debug("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
+                logging.debug("*****")
+                logging.debug("\n".join([str(x) for x in hmm_nodes1_heap]))
+                logging.debug("=====")
                 #Remove an old node...
                 _, pos_worse_node = heapq.heappop(hmm_nodes1_heap)
 
@@ -321,28 +322,28 @@ class Decoder(object):
                 #heapq.heappush(hmm_nodes1_heap, (node.p, cur_pos))
 
                 hmm_actives[hmmnode.id] = cur_pos
-                print("After")
-                print("\n".join([str(x) for x in hmm_nodes1]))
-                print("*****")
-                print("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
-                print("*****")
-                print("\n".join([str(x) for x in hmm_nodes1_heap]))
-                print("=====")
+                logging.debug("After")
+                logging.debug("\n".join([str(x) for x in hmm_nodes1]))
+                logging.debug("*****")
+                logging.debug("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
+                logging.debug("*****")
+                logging.debug("\n".join([str(x) for x in hmm_nodes1_heap]))
+                logging.debug("=====")
 
 
         else: #Old node, should we update its value?
 
-            print("Node is already inside")
+            logging.debug("Node is already inside")
             cur_node = hmm_nodes1[pos]
             
             if cur_node.p > prob:
 
-                print("It is not better than the old node...")
+                logging.debug("It is not better than the old node...")
                 return
 
             else:
 
-                print("It is better than the old node, replacing...")
+                logging.debug("It is better than the old node, replacing...")
                 cur_node.p = prob
                 cur_node.hmmp = hmmnode.hmmp
                 self.heap_push(hmm_nodes1_heap, (cur_node.p, pos), self.UPDATE)
@@ -372,30 +373,30 @@ class Decoder(object):
 
             pos = len(nodes1)
             # Added to actives
-            #print("Putting active in pos: {}".format(pos))
+            #logging.debug("Putting active in pos: {}".format(pos))
             self.actives[node.s] = pos
             # Added to null_nodes1/nodes1 depending on symbol node or not
             nodes1.append(node)
-            #print([str(x) for x in nodes1])
+            #logging.debug([str(x) for x in nodes1])
             # If this is a word node, restart and manage hypothesis
             if insert_word:
-                print(sg_state[2])
+                logging.debug(sg_state[2])
                 node.hmmp = 0.0
                 node.lmp = 0.0
         # Node already inserted, should be updated?
         else:
-            #print("IT is active: {}".format(node))
+            #logging.debug("IT is active: {}".format(node))
             pos = self.actives[node.s]
-            #print([str(x) for x in self.sg_nodes1])
+            #logging.debug([str(x) for x in self.sg_nodes1])
             old_node = self.sg_nodes1[pos]
-            #print("Replace?: {}".format(old_node))
+            #logging.debug("Replace?: {}".format(old_node))
             # Update stuff...
             score = old_node.p
 
             if node.p > score:
                 self.sg_nodes1[pos].p = node.p
-                #print("Yes")
-                #print([str(x) for x in self.sg_nodes1])
+                #logging.debug("Yes")
+                #logging.debug([str(x) for x in self.sg_nodes1])
 
 
     def decode(self, fea):
@@ -414,6 +415,8 @@ class Decoder(object):
 
 
 if __name__=="__main__":
+
+   logging.basicConfig(level=logging.DEBUG)
 
    import pickle
    amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
