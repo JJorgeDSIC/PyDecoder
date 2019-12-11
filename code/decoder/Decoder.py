@@ -1,6 +1,6 @@
 import numpy as np
-from AModel import AModel
-from SGraphModel import SGraphModel
+from models.AModel import AModel
+from models.SGraphModel import SGraphModel
 import heapq
 
 class Decoder(object):
@@ -67,7 +67,7 @@ class Decoder(object):
         self.final_iter = False
         self.hmm_nodes1_heap = []
         self.heap_initialized = False
-        self.nmaxstates = 20
+        self.nmaxhyp = 20
 
         # Enums
         self.NEW = 0
@@ -148,7 +148,7 @@ class Decoder(object):
         self.heap_initialized = False
         self.hmm_actives = {}
 
-        print("\n".join([str(x) for x in self.hmm_nodes0]))
+        #print("\n".join([str(x) for x in self.hmm_nodes0]))
    
         self.actives = [-1] * self.sg.nstates
 
@@ -253,7 +253,102 @@ class Decoder(object):
 
 
     def insert_hmm_node(self, hmmnode, fea):
-       pass
+        
+        sym = self.sg.get_state_info(hmmnode.s)[1] # (state_id, symbol, word, edges_begin, edges_end)
+        # Pruning could be done after or before getting the emission score
+        auxp = amodel.compute_gmm_emission_prob(fea, sym, 0)
+        prob = hmmnode.p + auxp # In which case this could be HUGE_VAL in the C implementation?
+        
+        hmm_actives = self.hmm_actives
+        hmm_nodes1 = self.hmm_nodes1
+        hmm_nodes1_heap = self.hmm_nodes1_heap
+
+        if prob < self.v_thr:
+            print("Pruned by v_thr")
+            print("Node: {}, prob:{} v_thr: {}".format(hmmnode, prob, self.v_thr))
+            return
+
+        full = len(hmm_nodes1_heap) == self.nmaxhyp
+
+        # If this hyp. is worse than the worst, we will prune it
+        if full and prob <= hmm_nodes1_heap[0][0]:
+            print("Pruned by min_heap")
+            print("Node: {}, prob:{} min_prob: {}".format(hmmnode, prob, hmm_nodes1_heap[0][0]))
+            return
+        
+
+        pos = hmm_actives.get(hmmnode.id, -1)
+
+        if pos == -1: #New node
+            
+            print("New node")
+
+            if not full:
+                print("Nodes is not full")
+                hmm_nodes1.append(hmmnode)
+                cur_pos = len(hmm_nodes1) - 1
+
+                self.heap_push(hmm_nodes1_heap, (prob, cur_pos), self.NEW)
+            
+                hmm_actives[hmmnode.id] = cur_pos  
+                print("\n".join([str(x) for x in hmm_nodes1]))
+                print("*****")
+                print("\n".join([str(x) for x in hmm_actives]))
+                print("*****")            
+                print("\n".join([str(x) for x in hmm_nodes1_heap]))          
+                print("=====")
+
+            else:
+                print("Nodes is full")
+                print("Before")
+                print("\n".join([str(x) for x in hmm_nodes1]))
+                print("*****")
+                print("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
+                print("*****")
+                print("\n".join([str(x) for x in hmm_nodes1_heap]))
+                print("=====")
+                #Remove an old node...
+                _, pos_worse_node = heapq.heappop(hmm_nodes1_heap)
+
+                hmm_actives[(hmm_nodes1[pos_worse_node].s,hmm_nodes1[pos_worse_node].q)] = -1
+                #I am keeping the old node in the hmm_nodes1 list
+                #If I remove the node, I should do something with the positions...
+
+                #Adding the new one
+                hmm_nodes1.append(hmmnode)
+                cur_pos = len(hmm_nodes1) - 1
+                self.heap_push(hmm_nodes1_heap, (prob, cur_pos), self.NEW)
+                #heapq.heappush(hmm_nodes1_heap, (node.p, cur_pos))
+
+                hmm_actives[hmmnode.id] = cur_pos
+                print("After")
+                print("\n".join([str(x) for x in hmm_nodes1]))
+                print("*****")
+                print("\n".join([str(x) + " : " + str(hmm_actives[x]) for x in hmm_actives]))
+                print("*****")
+                print("\n".join([str(x) for x in hmm_nodes1_heap]))
+                print("=====")
+
+
+        else: #Old node, should we update its value?
+
+            print("Node is already inside")
+            cur_node = hmm_nodes1[pos]
+            
+            if cur_node.p > prob:
+
+                print("It is not better than the old node...")
+                return
+
+            else:
+
+                print("It is better than the old node, replacing...")
+                cur_node.p = prob
+                cur_node.hmmp = hmmnode.hmmp
+                self.heap_push(hmm_nodes1_heap, (cur_node.p, pos), self.UPDATE)
+                #heapq.heappush(hmm_nodes1_heap, (node.p, pos))        
+
+
 
 
 
@@ -324,7 +419,7 @@ if __name__=="__main__":
    amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
    sg = pickle.load( open("../models/2.graph.p","rb"))
 
-   from TLSample import TLSample
+   from utils.TLSample import TLSample
    sample = TLSample("../samples/AAFA0016.features")
    decoder = Decoder(amodel, sg)
 
