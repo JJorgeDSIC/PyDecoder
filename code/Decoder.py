@@ -69,6 +69,11 @@ class Decoder(object):
         self.heap_initialized = False
         self.nmaxstates = 20
 
+        # Enums
+        self.NEW = 0
+        self.UPDATE = 1
+
+
     def expand_sg_nodes(self, node_lst):
         
         print("Expanding nodes:")
@@ -230,8 +235,25 @@ class Decoder(object):
 
         self.hmm_actives = {}
 
+    def heap_push(self, min_heap, node_id, mode):
+    
+        if mode == self.NEW:
+            heapq.heappush(min_heap, node_id)
+            return
+
+        if mode == self.UPDATE:
+          #Workaround to not implement my own heap...      
+          for i,n in enumerate(min_heap):
+              if n[1] == node_id[1]:
+                  print("Found: {}".format(n))
+                  min_heap.pop(i)
+
+          heapq.heappush(min_heap, node_id)
+          return 
+
+
     def insert_hmm_node(self, hmmnode, fea):
-        pass
+       pass
 
 
 
@@ -289,17 +311,17 @@ class Decoder(object):
         t_max = fea.sample.shape[1]
 
         #for i in range(1,t_max):
-        for i in range(1,100):
+        #for i in range(1,100):
 
-            t_fea = fea.sample[:,i]
+        #    t_fea = fea.sample[:,i]
 
-            self.viterbi(t_fea)
+        #    self.viterbi(t_fea)
 
 
 if __name__=="__main__":
 
    import pickle
-   amodel = pickle.load( open("../models/monophone_model_I32l.p", "rb"))
+   amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
    sg = pickle.load( open("../models/2.graph.p","rb"))
 
    from TLSample import TLSample
