@@ -5,15 +5,12 @@ import heapq
 import logging
 
 def print_lst(lst):
-
-    print_list = [str((x.p, x.id)) for x in lst]
-    logging.info("\n".join(print_list))
+    logging.debug("HMM nodes list")
+    logging.debug("\n".join([str((x.p, x.id)) for x in lst]))
 
 def print_lst_sg(lst):
-    
-    logging.info("SG nodes list")
-    print_list = [str(x) for x in lst]
-    logging.info("\n".join(print_list))
+    logging.debug("SG nodes list")
+    logging.debug("\n".join([str(x) for x in lst]))
 
 class Decoder(object):
 
@@ -33,6 +30,15 @@ class Decoder(object):
 
             return "S: {}, P: {:.5f}".format(self.s, self.p)
 
+    
+    class wordHyp(object):
+        def __init__(self, prev, word):
+            self.prev = prev
+            self.word = word
+
+        def __str__(self):
+            return "Prev: {}, word: {}".format(self.prev, self.word)
+
     class TrellisHMMNode(object):
         def __init__(self, s, q, p, hmmp, lmp, lm_state, hyp):
             self.s = s
@@ -48,8 +54,7 @@ class Decoder(object):
             return hash(self.id)   
 
         def __str__(self):
-
-            return "S: {}, Q: {}, ID: {}, P: {:.5f} HMMP: {:.5f}".format(self.s, self.q, self.id, self.p, self.hmmp)
+            return "S: {}, Q: {}, ID: {}, P: {:.5f} HMMP: {:.5f}, L.WORD: {}".format(self.s, self.q, self.id, self.p, self.hmmp, self.hyp)
 
     def __init__(self, amodel, sg):
 
@@ -85,15 +90,21 @@ class Decoder(object):
 
 
     def expand_sg_nodes(self, node_lst):
-        
+
+        self.max_prob = -2**10
+        self.max_node = None
+
         while len(node_lst) != 0:
 
             node = node_lst.pop()
             sg_state = self.sg.get_state_info(node.s)
 
-            if sg_state[1] != '-':
-                self.hypothesis.append(sg_state[1])
-            
+            if self.final_iter and node.s ==  self.sg.final:
+                if node.p > self.max_prob:
+                    self.max_prob = node.p
+                    self.max_node = node
+                    self.max_hyp = node.hyp
+
             current_p = node.p
             current_lmp = node.lmp
             prev_s = node.s
@@ -101,23 +112,31 @@ class Decoder(object):
             edges_end = sg.edges_end[prev_s]
 
             for pos in range(edges_begin, edges_end):
+                s = sg.edges_dst[pos]
                 if not self.final_iter:
                     if sg.edges_dst[pos] == sg.final:
+                        # logging.info("Final reached")
                         continue
-                
-                s = sg.edges_dst[pos]
+                else:
+                    # We want to arrive to the final state
+                    sym = self.sg.get_state_info(s)[1] # (state_id, symbol, word, edges_begin, edges_end)
+                    if sym != '-':
+                        continue
+
                 p = current_p + sg.edges_weight[pos] * self.GSF + self.WIP
                 lmp = current_lmp + sg.edges_weight[pos]
-                sgnode = self.TrellisSGNode(s, p, 0, lmp, None, None)
+                sgnode = self.TrellisSGNode(s, p, 0, lmp, None, node.hyp)
                 self.insert_sg_node(sgnode)
-        
 
     def viterbi_init(self, fea):
 
         #Initialize the search
         self.current_fea = fea
 
-        sgnode = self.TrellisSGNode(self.sg.start, 0.0, 0.0, 0, None, None)
+        # Empty hyp
+        first_hyp = 0
+
+        sgnode = self.TrellisSGNode(self.sg.start, 0.0, 0.0, 0, None, first_hyp)
         self.actives = [-1] * self.sg.nstates
         self.actives[self.sg.start] = 0
         self.sg_null_nodes0 = []
@@ -152,13 +171,13 @@ class Decoder(object):
 
         # null_nodes1 is empty now, it contained the SG nodes w/o syms or words
         # nodes1 contains the SG nodes that have syms or words associated
-        self.clear_sg_lst(self.sg_nodes1, self.sg_nodes0)
-
+        self.copy_sg_lst(self.sg_nodes1, self.sg_nodes0)
+        self.sg_nodes1 = []
         # From SG nodes to HMM nodes
         self.from_sg_to_hmm_nodes()
     
 
-    def clear_sg_lst(self, src, dst):
+    def copy_sg_lst(self, src, dst):
         
         for node in src:
             self.actives[node.s] = -1
@@ -171,7 +190,6 @@ class Decoder(object):
            # TO DO: Rethink this array-like representation...
            edges_begin = self.sg.edges_begin[node.s]
            edges_end = self.sg.edges_end[node.s]
-           logging.debug(self.sg.get_state_info(node.s))
            for pos in range(edges_begin, edges_end):
                hmmnode = self.TrellisHMMNode(node.s, 0, node.p, node.hmmp, node.lmp, node.lm_state, node.hyp)
                self.insert_hmm_node(hmmnode, self.current_fea)
@@ -180,27 +198,27 @@ class Decoder(object):
 
         # TO DO: Refactor, shallow or deep copy? maybe they will contain more complex info
         # sg_nodes0 <- sg_nodes1
-        self.clear_sg_lst(self.sg_nodes1, self.sg_nodes0)
+        self.copy_sg_lst(self.sg_nodes1, self.sg_nodes0)
+        self.sg_nodes1 = []
 
         # Expand sg_nodes0 -> sg_nodes1
         if len(self.sg_nodes0) != 0:
             self.expand_sg_nodes(self.sg_nodes0)
-        
+
         # Expand sg_null_nodes0 -> sg_null_nodes1
         # New sg_null_nodes could appear, we should iterate until there are none
         while len(self.sg_null_nodes1) != 0:
-            # Workaround, TO DO, to review this step...
-            self.clear_sg_lst(self.sg_null_nodes1, self.sg_null_nodes0)
-            
-            self.sg_null_nodes1 = []
 
+            # Workaround, TO DO, to review this step...
+            self.copy_sg_lst(self.sg_null_nodes1, self.sg_null_nodes0)
+            self.sg_null_nodes1 = []
             self.expand_sg_nodes(self.sg_null_nodes0)
         
         # TO DO: Refactor this part
         # null_nodes1 is empty now, it contained the SG nodes w/o syms or words
         # nodes1 contains the SG nodes that have syms or words associated
-        self.clear_sg_lst(self.sg_nodes1, self.sg_nodes0)
-
+        self.copy_sg_lst(self.sg_nodes1, self.sg_nodes0)
+        self.sg_nodes1 = []
         # From SG nodes to HMM nodes
         self.from_sg_to_hmm_nodes()
 
@@ -227,7 +245,8 @@ class Decoder(object):
         while len(hmm_nodes0) != 0:
 
             node = hmm_nodes0.pop()
-            logging.info(node)
+            logging.debug("HE")
+            logging.debug(node)
 
             if node.p < old_thr:
                 continue
@@ -253,20 +272,23 @@ class Decoder(object):
 
             #Staying in the same state, I could reuse the old node, TO DO
             hmmnode = self.TrellisHMMNode(node.s, node.q, current_p + p0_trans, current_hmmp + p0_trans, node.lmp, node.lm_state, node.hyp)
-
-            self.insert_hmm_node(hmmnode, fea)
+            if not self.final_iter:
+                self.insert_hmm_node(hmmnode, fea)
 
             if node.q + 1 < amodel.trans_dict[sym].num_hmm_states:
 
                 #Jumping to the following state
                 hmmnode = self.TrellisHMMNode(node.s, node.q + 1, current_p + p1_trans, current_hmmp + p1_trans, node.lmp, node.lm_state, node.hyp)
-                self.insert_hmm_node(hmmnode, fea) # from 0->1, 1->2
+                if not self.final_iter:
+                     self.insert_hmm_node(hmmnode, fea) # from 0->1, 1->2
 
             else: #from 2-> outside
                 isfinal = True
 
             if isfinal:
-                sgnode = self.TrellisSGNode(node.s, node.p + p1_trans, node.hmmp + p1_trans, node.lmp, None, None)
+                sgnode = self.TrellisSGNode(node.s, node.p + p1_trans, node.hmmp + p1_trans, node.lmp, None, node.hyp)
+                #if self.final_iter:
+                #    logging.info("Final expansion: {}".format(sgnode))
                 self.insert_sg_node(sgnode)
 
         # After this step, SG nodes in null_nodes1 or sg_nodes1 have been created
@@ -349,7 +371,6 @@ class Decoder(object):
                 hmm_nodes1.append(hmmnode)
                 cur_pos = len(hmm_nodes1) - 1
                 self.heap_push(hmm_nodes1_heap, (prob, cur_pos), self.NEW)
-                #heapq.heappush(hmm_nodes1_heap, (node.p, cur_pos))
 
                 hmm_actives[hmmnode.id] = cur_pos
 
@@ -369,8 +390,6 @@ class Decoder(object):
                 cur_node.p = prob
                 cur_node.hmmp = hmmnode.hmmp
                 self.heap_push(hmm_nodes1_heap, (cur_node.p, pos), self.UPDATE)
-                #heapq.heappush(hmm_nodes1_heap, (node.p, pos))        
-
 
     def update_lm_beam(self, value):
 
@@ -381,7 +400,6 @@ class Decoder(object):
 
         actives = self.actives
         sg_state = self.sg.get_state_info(node.s)
-
         #Is this a word node?
         insert_word = True if sg_state[2] != '-' and sg_state[2] != '>' else False
         
@@ -395,7 +413,6 @@ class Decoder(object):
 
         # If this state was not visited
         if self.actives[node.s] == -1: 
-
             if node.p > self.v_lm_max:
                 self.update_lm_beam(node.p)
 
@@ -406,59 +423,76 @@ class Decoder(object):
             nodes1.append(node)
             # If this is a word node, restart and manage hypothesis
             if insert_word:
+                hyp = self.wordHyp(node.hyp, sg_state[2])
+                self.hyp_lst.append(hyp)
+                node.hyp = len(self.hyp_lst) - 1
                 node.hmmp = 0.0
                 node.lmp = 0.0
 
         # Node already inserted, should be updated?
         else:
-            
             pos = self.actives[node.s]
-            old_node = self.sg_nodes1[pos]
+            old_node = nodes1[pos]
             
             # If this node is better
             if node.p >  old_node.p: 
                 if node.p > self.v_lm_max:
                     self.update_lm_beam(node.p)
-
                 # Word node
                 if insert_word:
                     # Do word-related stuff, TO DO    
                     # Update fields
-                    self.sg_nodes1[pos].p = node.p
-
+                    nodes1[pos].p = node.p
+                    nodes1[pos].hyp = node.hyp
                 # No-Word node
                 else:
-                    self.sg_nodes1[pos] = node
+                    nodes1[pos] = node
+    
+    def get_max_hyp(self):
 
+        output = [self.hyp_lst[self.max_hyp].word]
+        prev = self.hyp_lst[self.max_hyp].prev
+        while prev != 0:
+            output.append(self.hyp_lst[prev].word)
+            prev = self.hyp_lst[prev].prev
+
+        return (" ".join([x for x in reversed(output)]))
 
     def decode(self, fea):
         
         fprob = 0.0
 
+        self.hyp_lst = []
+
+        self.hyp_lst.append(self.wordHyp(-1,""))
+
+        self.final_iter = False
+
+        #For the first approach I will increment the list
+        # the next iteration I will use another structure to manage
+        # the allocation/release stuff to reuse some space
+
         self.viterbi_init(fea.sample[:,0])
-
         fprob += self.v_max
-
         
         # Apply adaptative beam?
         t_max = fea.sample.shape[1]
-        logging.info("t_max: {}".format(t_max))
 
         for i in range(1,t_max):
-
-            logging.info("*" * 20)
-            logging.info("ITER " + str(i - 1) + "*" * 20)
-            logging.info("*" * 20)
-
             t_fea = fea.sample[:,i]
-
             self.viterbi(t_fea,i)
+        
+        self.final_iter = True
+        self.viterbi(None,i)
 
+        sentence = self.get_max_hyp()
+
+        logging.info("Recognised: {}".format(sentence))
 
 if __name__=="__main__":
 
-   #logging.basicConfig(filename='deco.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
    logging.basicConfig(filename='deco.info.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+   #logging.basicConfig(filename='deco.debug.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 
    import pickle
    amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
