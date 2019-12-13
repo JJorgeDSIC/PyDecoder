@@ -26,7 +26,7 @@ To recognise the provided sample, run:
 
 ```
 cd code
-python -m decode.Decoder
+python -m decoder.Decoder
 ```
 
 The output will be generated in the **deco.info.log** file.
