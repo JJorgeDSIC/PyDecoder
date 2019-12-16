@@ -8,15 +8,15 @@ class GaussianMixtureState(object):
         self.dim = dim
         self.components = components
 
-        self.pmembers = np.zeros((self.components,))
-        self.mus = np.zeros((self.components, self.dim))
-        self.vars = np.zeros((self.components, self.dim))
+        self.pmembers = np.zeros((self.components,), dtype=np.float32)
+        self.mus = np.zeros((self.components, self.dim), dtype=np.float32)
+        self.ivars = np.zeros((self.components, self.dim), dtype=np.float32)
 
     def __str__(self):
 
         s = ""
         s+= "Symbol: {}, dim: {}, I:{}, ".format(self.symbol,self.dim, self.components)
-        s+= "PMembers: {}, MU: {}, VAR:{}".format(self.pmembers,self.mus, self.vars)
+        s+= "PMembers: {}, MU: {}, VAR:{}".format(self.pmembers,self.mus, self.ivars)
         return s
              
 class GaussianMixtureTrans(object):
@@ -25,7 +25,7 @@ class GaussianMixtureTrans(object):
         self.phoneme = phoneme
         self.num_hmm_states= num_hmm_states
 
-        self.trans = np.zeros((self.num_hmm_states,))
+        self.trans = np.zeros((self.num_hmm_states,), dtype=np.float32)
         self.senones = []
 
     def __str__(self):
@@ -37,21 +37,34 @@ class GaussianMixtureTrans(object):
        
 class AModel(object):
 
+
+
     def __init__(self, model_type, model_path):
+
+        
 
         if model_type != "TiedStates" and model_type != "Mixture":
             raise Exception("Not implemented yet")
+
+        self.TIEDSTATES = 0
+        self.MIXTURE = 1
+        self.cache = {}
         
         self.gms_dict = {}
         self.trans_dict = {}
         self.load_model(model_type, model_path)
 
+    def reset_cache(self):
+        self.cache = {}
+
     def load_model(self, model_type, model_path):
 
         if model_type == "TiedStates":
+            self.model_type = self.TIEDSTATES
             self.load_tiedstates_model(model_path)
 
         if model_type == "Mixture":
+            self.model_type = self.MIXTURE
             self.load_mixture_model(model_path)
         
     def read_gaussian_mixture_trans(self, model_file):
@@ -78,11 +91,27 @@ class AModel(object):
         else:
             print("KO: Trans or TransP expected")
 
+
+    def compute_emission_prob(self, fea, sym, q):
+
+        if self.model_type == self.TIEDSTATES:
+            # WIP: Include cache here.
+            return self.compute_gmm_emission_prob_tiedstate(fea, senone)
+
+        elif self.model_type == self.MIXTURE:
+
+            if (sym,q) in self.cache:
+                return self.cache[(sym,q)]
+            else:
+                self.cache[(sym,q)] = self.compute_gmm_emission_prob_mixture(fea, sym, q)
+                return self.cache[(sym,q)]
+        else:
+            raise Exception("Model unknown")
+
     def compute_gmm_emission_prob_tiedstate(self, fea, senone):
         
         mus = self.gms_dict[senone].mus
-        vars_ = self.gms_dict[senone].vars
-        ivars_ = 1.0/ vars_
+        ivars_ = self.gms_dict[senone].ivars
         pmembers = self.gms_dict[senone].pmembers
         logcs = self.gms_dict[senone].logcs
 
@@ -90,11 +119,10 @@ class AModel(object):
 
         return self.compute_gaussian_robust_addition(logprob_per_components)
     
-    def compute_gmm_emission_prob(self, fea, sym, q):
+    def compute_gmm_emission_prob_mixture(self, fea, sym, q):
         
         mus = self.gms_dict[sym][q].mus
-        vars_ = self.gms_dict[sym][q].vars
-        ivars_ = 1.0/ vars_
+        ivars_ = self.gms_dict[sym][q].ivars
         pmembers = self.gms_dict[sym][q].pmembers
         logcs = self.gms_dict[sym][q].logcs
 
@@ -150,9 +178,9 @@ class AModel(object):
         if line != "Members":
                 print("KO: Members expected")
 
-        gms.mus = np.zeros((components, dim))
-        gms.vars = np.zeros((components, dim))
-        gms.logcs = np.zeros((components,))
+        gms.mus = np.zeros((components, dim), dtype=np.float32)
+        vars = np.zeros((components, dim), dtype=np.float32)
+        gms.logcs = np.zeros((components,), dtype=np.float32)
 
         for i in range(components):
             line = model_file.readline().split()
@@ -163,16 +191,18 @@ class AModel(object):
             line = model_file.readline().split()
             if line[0] != "VAR":
                 print("KO: VAR expected")
-            gms.vars[i,:]= np.array([float(x) for x in line[1:]])
-            #print(gms.vars)
+            vars[i,:]= np.array([float(x) for x in line[1:]])
+            #print(vars)
 
             aux = 0 
             for d in range(dim): 
-                aux += np.log(gms.vars[i,d]) 
+                aux += np.log(vars[i,d]) 
             aux+= dim * LOG2PI 
             logc = -0.5 * aux 
             gms.logcs[i] = logc
 
+        gms.ivars =  1.0/vars
+        
         self.gms_dict[symbol] = gms
 
     def read_gaussian_mixture_state(self, model_file):
@@ -232,9 +262,9 @@ class AModel(object):
             if line != "Members":
                     print("KO: Members expected")
 
-            gms.mus = np.zeros((components, dim))
-            gms.vars = np.zeros((components, dim))
-            gms.logcs = np.zeros((components,))
+            gms.mus = np.zeros((components, dim), dtype=np.float32)
+            vars = np.zeros((components, dim), dtype=np.float32)
+            gms.logcs = np.zeros((components,), dtype=np.float32)
 
             for i in range(components):
                 line = model_file.readline().split()
@@ -245,16 +275,17 @@ class AModel(object):
                 line = model_file.readline().split()
                 if line[0] != "VAR":
                     print("KO: VAR expected")
-                gms.vars[i,:]= np.array([float(x) for x in line[1:]])
-                #print(gms.vars)
+                vars[i,:]= np.array([float(x) for x in line[1:]])
+                #print(vars)
 
                 aux = 0 
                 for d in range(dim): 
-                    aux += np.log(gms.vars[i,d]) 
+                    aux += np.log(vars[i,d]) 
                 aux+= dim * LOG2PI 
                 logc = -0.5 * aux 
                 gms.logcs[i] = logc
 
+            gms.ivars =  1.0/vars
             self.gms_dict[phoneme].append(gms)
 
     def load_mixture_model(self, model_path):
