@@ -133,6 +133,8 @@ class Decoder(object):
         #Initialize the search
         self.current_fea = fea
 
+        self.amodel.reset_cache()
+
         # Empty hyp
         first_hyp = 0
 
@@ -228,6 +230,8 @@ class Decoder(object):
 
         self.current_fea = fea
 
+        self.amodel.reset_cache()
+
         self.sg_nodes0 = []
         self.sg_nodes1 = []
         self.actives = [-1] * self.sg.nstates
@@ -306,6 +310,20 @@ class Decoder(object):
         self.hmm_nodes1 = []
         self.hmm_actives = {}
 
+
+    def update_heap(self, min_heap, node_id):
+        #Workaround to not implement my own heap...
+        pos = 0
+        while min_heap[pos][1] != node_id[1]:
+            pos+=1
+
+        assert(pos != len(min_heap))
+
+        min_heap[pos] = node_id
+
+        #heapq.heappush(min_heap, node_id)
+        heapq.heapify(min_heap)
+
     def heap_push(self, min_heap, node_id, mode):
     
         if mode == self.NEW:
@@ -313,12 +331,7 @@ class Decoder(object):
             return
 
         if mode == self.UPDATE:
-          #Workaround to not implement my own heap...      
-          for i,n in enumerate(min_heap):
-              if n[1] == node_id[1]:
-                  min_heap.pop(i)
-
-          heapq.heappush(min_heap, node_id)
+          self.update_heap(min_heap, node_id)
           return 
 
     def insert_hmm_node(self, hmmnode, fea):
@@ -472,8 +485,6 @@ class Decoder(object):
         # the next iteration I will use another structure to manage
         # the allocation/release stuff to reuse some space
 
-        self.amodel.reset_cache()
-
         self.viterbi_init(fea.sample[:,0])
         fprob += self.v_max
         
@@ -483,8 +494,7 @@ class Decoder(object):
         for i in range(1,t_max):
             t_fea = fea.sample[:,i]
             self.viterbi(t_fea,i)
-            self.amodel.reset_cache()
-        
+            
         self.final_iter = True
         self.viterbi(None,i)
 
@@ -504,7 +514,5 @@ if __name__=="__main__":
    from utils.TLSample import TLSample
    sample = TLSample("../samples/AAFA0016.features")
    decoder = Decoder(amodel, sg)
-
    decoder.nmaxhyp = 20
-
    decoder.decode(sample)
