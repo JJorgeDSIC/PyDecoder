@@ -258,7 +258,7 @@ class Decoder(object):
             sym = self.sg.get_state_info(node.s)[1]
             """
             another strategy: emit before expanding the state
-            auxp = amodel.compute_gmm_emission_prob(fea, sym, node.q)
+            auxp = amodel.compute_emission_prob(fea, sym, node.q)
             #logging.debug(auxp)
             node.p+=auxp
             node.hmmp+=auxp
@@ -325,7 +325,7 @@ class Decoder(object):
         
         sym = self.sg.get_state_info(hmmnode.s)[1] # (state_id, symbol, word, edges_begin, edges_end)
         # Pruning could be done after or before getting the emission score
-        auxp = amodel.compute_gmm_emission_prob(fea, sym, hmmnode.q)
+        auxp = amodel.compute_emission_prob(fea, sym, hmmnode.q)
         prob = hmmnode.p + auxp # In which case this could be HUGE_VAL in the C implementation?
         hmmnode.p = prob
         hmmnode.hmmp += auxp
@@ -472,6 +472,8 @@ class Decoder(object):
         # the next iteration I will use another structure to manage
         # the allocation/release stuff to reuse some space
 
+        self.amodel.reset_cache()
+
         self.viterbi_init(fea.sample[:,0])
         fprob += self.v_max
         
@@ -481,6 +483,7 @@ class Decoder(object):
         for i in range(1,t_max):
             t_fea = fea.sample[:,i]
             self.viterbi(t_fea,i)
+            self.amodel.reset_cache()
         
         self.final_iter = True
         self.viterbi(None,i)
@@ -501,5 +504,7 @@ if __name__=="__main__":
    from utils.TLSample import TLSample
    sample = TLSample("../samples/AAFA0016.features")
    decoder = Decoder(amodel, sg)
+
+   decoder.nmaxhyp = 20
 
    decoder.decode(sample)
