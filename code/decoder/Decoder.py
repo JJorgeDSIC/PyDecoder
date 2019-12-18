@@ -1,16 +1,120 @@
 import numpy as np
-from models.AModel import AModel
-from models.SGraphModel import SGraphModel
-import heapq
 import logging
 
-def print_lst(lst):
-    logging.debug("HMM nodes list")
-    logging.debug("\n".join([str((x.p, x.id)) for x in lst]))
+from models.AModel import AModel
+from models.SGraphModel import SGraphModel
+from utils.TLSample import TLSample
 
-def print_lst_sg(lst):
-    logging.debug("SG nodes list")
-    logging.debug("\n".join([str(x) for x in lst]))
+class HMMNodeManager(object):
+
+    def __init__(self, max_size):
+
+        self.nmaxhyp = max_size
+        self.max_size = (max_size + 1)
+        self.heap = [None] * self.max_size
+        self.hash_table = {}
+        self.size = 0
+
+    def is_full(self):
+        return self.size == self.nmaxhyp
+
+    def min_node(self):
+        return self.heap[1]
+
+    def get_node_position(self, id):
+        return self.hash_table.get(id, -1)
+
+    def get_node(self,id):
+        return self.heap[self.hash_table[id]]
+
+    def reset(self):
+        # Think about doing this better
+        for i,_ in enumerate(self.heap):
+            self.heap[i] = None
+        
+        self.hash_table = {}
+        self.size = 0
+
+    def push(self, node):
+
+        if self.size == 0:
+    
+            self.heap[1] = node
+            self.hash_table[node.id] = 1
+            self.size+=1
+            
+        else:
+
+            posIns = self.size + 1
+
+            self.heap[posIns] = node
+            self.hash_table[node.id] = posIns
+
+            while posIns > 1 and self.heap[posIns] < self.heap[posIns//2]:
+                self.heap[posIns//2], self.heap[posIns] = self.heap[posIns], self.heap[posIns//2]
+                self.hash_table[self.heap[posIns].id] = posIns # Previous node
+                self.hash_table[self.heap[posIns//2].id] = posIns//2 # Current node   
+
+                posIns = posIns//2
+                
+            self.size+=1
+
+        return self.hash_table[node.id]
+    
+    def pop(self):
+
+        if self.size != 0:
+            # Review this
+            del self.hash_table[self.heap[1].id]
+            self.heap[1] = self.heap[self.size]
+            
+            self.heap[self.size] = None
+            self.hash_table[self.heap[1].id] = 1
+            self.size-=1
+
+            self.bubbledown(1)
+
+    def poppush(self, node):
+    
+        if self.size != 0:
+            # Review this
+            self.hash_table[self.heap[1].id] = -1
+            self.heap[1] = node
+            self.hash_table[self.heap[1].id] = 1
+
+            self.bubbledown(1)
+
+    def bubbledown(self, curPos):
+
+        son = curPos * 2
+        isHeap = False
+
+        while son <= self.size and not isHeap:
+            
+            if son < self.size and self.heap[son + 1] < self.heap[son]:
+                son+=1
+
+            if self.heap[son] < self.heap[curPos]:
+                self.heap[son], self.heap[curPos] = self.heap[curPos], self.heap[son]              
+                self.hash_table[self.heap[curPos].id] = curPos # Previous node
+                self.hash_table[self.heap[son].id] = son # Current node  
+                curPos = son
+                son = curPos * 2
+            else:
+                isHeap = True
+
+    def update(self, node):
+
+        pos = self.hash_table[node.id]
+        self.heap[pos] = node
+
+        self.bubbledown(pos)
+      
+ 
+    def __str__(self):
+        s = str("\n".join([str(x) + " " + str(i) for i,x in enumerate(self.heap)]))
+        s += "\n " + str([str(x) + " " + str(self.hash_table[x]) for x in self.hash_table])
+        return s
 
 class Decoder(object):
 
@@ -30,7 +134,6 @@ class Decoder(object):
 
             return "S: {}, P: {:.5f}".format(self.s, self.p)
 
-    
     class wordHyp(object):
         def __init__(self, prev, word):
             self.prev = prev
@@ -53,6 +156,26 @@ class Decoder(object):
         def __hash__(self):
             return hash(self.id)   
 
+        def __eq__(self, other):
+            """Override the default Equals behavior"""
+            return self.id == other.id and self.p == other.p
+
+        def __ne__(self, other):
+            """Override the default Unequal behavior"""
+            return self.id != other.id or self.p != other.p
+
+        def __lt__(self, other):
+            return self.p < other.p 
+
+        def __le__(self, other):
+            return self.p <= other.p 
+
+        def __gt__(self, other):
+            return self.p > other.p 
+
+        def __ge__(self, other):
+            return self.p >= other.p        
+
         def __str__(self):
             return "S: {}, Q: {}, ID: {}, P: {:.5f} HMMP: {:.5f}, L.WORD: {}".format(self.s, self.q, self.id, self.p, self.hmmp, self.hyp)
 
@@ -61,15 +184,19 @@ class Decoder(object):
         self.amodel = amodel
         self.sg = sg
 
+        # SG structures
         self.actives = []
         self.sg_nodes0 = []
         self.sg_nodes1 = []
         self.sg_null_nodes0 = []
         self.sg_null_nodes1 = []
+
+        #HMM lists for time t
         self.hmm_nodes0 = []
-        self.hmm_nodes1 = []
-        self.hmm_actives = {}
+
+        #Pruning parameters
         self.beam = 2**10
+        self.nmaxhyp = 20
         self.v_max = -2**10
         self.v_thr = -2**10
         self.v_lm_max = -2**10
@@ -77,17 +204,79 @@ class Decoder(object):
         self.v_abeam= 2**10
         self.v_lm_beam= 2**10
         self.v_maxh = None
-        self.hypothesis = []
         self.GSF = 1.0
         self.WIP = 0.0
+        
+        # Final iteration flag
         self.final_iter = False
-        self.hmm_nodes1_heap = []
-        self.nmaxhyp = 20
+        
+    def insert_hmm_node(self, hmmnode, fea):
+        
+        sym = self.sg.get_state_sym(hmmnode.s) # (state_id, symbol, word, edges_begin, edges_end)
+        # Pruning could be done after or before getting the emission score
+        auxp = amodel.compute_emission_prob(fea, sym, hmmnode.q)
+        prob = hmmnode.p + auxp # In which case this could be HUGE_VAL in the C implementation?
+        hmmnode.p = prob
+        hmmnode.hmmp += auxp
 
-        # Enums
-        self.NEW = 0
-        self.UPDATE = 1
+        if prob < self.v_thr:
+            return
+        
+        full = self.hmm_node_manager.is_full()
+ 
+        worst_node = self.hmm_node_manager.min_node()
+        
+        # If this hyp. is worse than the worst, we will prune it
+        if full and prob <= worst_node.p:
+            return
+        
+        pos = self.hmm_node_manager.get_node_position(hmmnode.id)
+        
+        if pos == -1: #New node
+        
+            if prob > self.v_max:
+                self.v_max = prob
+                self.v_thr = prob - self.v_abeam
+                self.v_maxh = hmmnode.hyp
 
+            if not full:
+                self.hmm_node_manager.push(hmmnode)
+            else:
+                #Remove an old node and push a new one
+                self.hmm_node_manager.poppush(hmmnode)
+
+        else: #Old node, should we update its value?
+            
+            cur_node = self.hmm_node_manager.get_node(hmmnode.id)
+            if cur_node.p > prob:
+                return
+            else:
+                if prob > self.v_max:
+                    
+                    self.v_max = prob
+                    self.v_thr = prob - self.v_abeam
+                    self.v_maxh = hmmnode.hyp
+
+                self.hmm_node_manager.update(hmmnode)
+                
+
+    def viterbi_init(self, fea):
+
+        #Initialize the search
+        self.current_fea = fea
+            
+        # Empty hyp
+        first_hyp = 0
+
+        sgnode = self.TrellisSGNode(self.sg.start, 0.0, 0.0, 0, None, first_hyp)
+        self.actives = [-1] * self.sg.nstates
+        self.actives[self.sg.start] = 0
+        self.sg_null_nodes0 = []
+        self.sg_null_nodes0.append(sgnode)
+
+        self.iter_sg_init()
+
+        self.hmm_nodes0 = self.hmm_node_manager.heap[1:self.hmm_node_manager.size+1]
 
     def expand_sg_nodes(self, node_lst):
 
@@ -97,8 +286,6 @@ class Decoder(object):
         while len(node_lst) != 0:
 
             node = node_lst.pop()
-            sg_state = self.sg.get_state_info(node.s)
-
             if self.final_iter and node.s ==  self.sg.final:
                 if node.p > self.max_prob:
                     self.max_prob = node.p
@@ -119,7 +306,7 @@ class Decoder(object):
                         continue
                 else:
                     # We want to arrive to the final state
-                    sym = self.sg.get_state_info(s)[1] # (state_id, symbol, word, edges_begin, edges_end)
+                    sym = self.sg.get_state_sym(s)
                     if sym != '-':
                         continue
 
@@ -127,33 +314,6 @@ class Decoder(object):
                 lmp = current_lmp + sg.edges_weight[pos]
                 sgnode = self.TrellisSGNode(s, p, 0, lmp, None, node.hyp)
                 self.insert_sg_node(sgnode)
-
-    def viterbi_init(self, fea):
-
-        #Initialize the search
-        self.current_fea = fea
-
-        self.amodel.reset_cache()
-
-        # Empty hyp
-        first_hyp = 0
-
-        sgnode = self.TrellisSGNode(self.sg.start, 0.0, 0.0, 0, None, first_hyp)
-        self.actives = [-1] * self.sg.nstates
-        self.actives[self.sg.start] = 0
-        self.sg_null_nodes0 = []
-        self.sg_null_nodes0.append(sgnode)
-
-        self.iter_sg_init()
-        
-        # From the worst to the best node, reversed
-        while(len(self.hmm_nodes1_heap) != 0):
-            prob, pos = heapq.heappop(self.hmm_nodes1_heap)
-            self.hmm_nodes0.append(self.hmm_nodes1[pos])
-
-        self.hmm_nodes1 = []
-        self.hmm_nodes1_heap = []
-        self.hmm_actives = {}
 
     def iter_sg_init(self):
 
@@ -178,7 +338,6 @@ class Decoder(object):
         # From SG nodes to HMM nodes
         self.from_sg_to_hmm_nodes()
     
-
     def copy_sg_lst(self, src, dst):
         
         for node in src:
@@ -188,13 +347,8 @@ class Decoder(object):
     def from_sg_to_hmm_nodes(self):
 
         for node in self.sg_nodes0:
-           sym = self.sg.get_state_info(node.s)[1] # (state_id, symbol, word, edges_begin, edges_end)
-           # TO DO: Rethink this array-like representation...
-           edges_begin = self.sg.edges_begin[node.s]
-           edges_end = self.sg.edges_end[node.s]
-           for pos in range(edges_begin, edges_end):
-               hmmnode = self.TrellisHMMNode(node.s, 0, node.p, node.hmmp, node.lmp, node.lm_state, node.hyp)
-               self.insert_hmm_node(hmmnode, self.current_fea)
+           hmmnode = self.TrellisHMMNode(node.s, 0, node.p, node.hmmp, node.lmp, node.lm_state, node.hyp)
+           self.insert_hmm_node(hmmnode, self.current_fea)
 
     def iter_sg(self):
 
@@ -236,6 +390,8 @@ class Decoder(object):
         self.sg_nodes1 = []
         self.actives = [-1] * self.sg.nstates
 
+        self.hmm_node_manager.reset()
+
         hmm_nodes0 = self.hmm_nodes0
 
         old_max = self.v_max
@@ -249,8 +405,6 @@ class Decoder(object):
         while len(hmm_nodes0) != 0:
 
             node = hmm_nodes0.pop()
-            logging.debug("HE")
-            logging.debug(node)
 
             if node.p < old_thr:
                 continue
@@ -259,7 +413,7 @@ class Decoder(object):
 
             isfinal = False
             #TrellisHMMNode node
-            sym = self.sg.get_state_info(node.s)[1]
+            sym = self.sg.get_state_sym(node.s)
             """
             another strategy: emit before expanding the state
             auxp = amodel.compute_emission_prob(fea, sym, node.q)
@@ -291,133 +445,28 @@ class Decoder(object):
 
             if isfinal:
                 sgnode = self.TrellisSGNode(node.s, node.p + p1_trans, node.hmmp + p1_trans, node.lmp, None, node.hyp)
-                #if self.final_iter:
-                #    logging.info("Final expansion: {}".format(sgnode))
                 self.insert_sg_node(sgnode)
 
         # After this step, SG nodes in null_nodes1 or sg_nodes1 have been created
         # We should do the iteration also for SG nodes
         self.iter_sg()
       
-        # hmm_nodes0 <- hmm_nodes1
-        self.hmm_nodes0 = []
-        
-        # From the worst to the best node, reversed
-        while(len(self.hmm_nodes1_heap) != 0):
-            prob, pos = heapq.heappop(self.hmm_nodes1_heap)
-            self.hmm_nodes0.append(self.hmm_nodes1[pos])
+        self.hmm_nodes0 = self.hmm_node_manager.heap[1:self.hmm_node_manager.size+1]
 
-        self.hmm_nodes1 = []
-        self.hmm_actives = {}
-
-
-    def update_heap(self, min_heap, node_id):
-        #Workaround to not implement my own heap...
-        pos = 0
-        while min_heap[pos][1] != node_id[1]:
-            pos+=1
-
-        assert(pos != len(min_heap))
-
-        min_heap[pos] = node_id
-
-        #heapq.heappush(min_heap, node_id)
-        heapq.heapify(min_heap)
-
-    def heap_push(self, min_heap, node_id, mode):
-    
-        if mode == self.NEW:
-            heapq.heappush(min_heap, node_id)
-            return
-
-        if mode == self.UPDATE:
-          self.update_heap(min_heap, node_id)
-          return 
-
-    def insert_hmm_node(self, hmmnode, fea):
-        
-        sym = self.sg.get_state_info(hmmnode.s)[1] # (state_id, symbol, word, edges_begin, edges_end)
-        # Pruning could be done after or before getting the emission score
-        auxp = amodel.compute_emission_prob(fea, sym, hmmnode.q)
-        prob = hmmnode.p + auxp # In which case this could be HUGE_VAL in the C implementation?
-        hmmnode.p = prob
-        hmmnode.hmmp += auxp
-        
-        hmm_actives = self.hmm_actives
-        hmm_nodes1 = self.hmm_nodes1
-        hmm_nodes1_heap = self.hmm_nodes1_heap
-
-        if prob < self.v_thr:
-            return
-
-        full = len(hmm_nodes1_heap) == self.nmaxhyp
-
-        # If this hyp. is worse than the worst, we will prune it
-        if full and prob <= hmm_nodes1_heap[0][0]:
-            return
-        
-        pos = hmm_actives.get(hmmnode.id, -1)
-        
-        if pos == -1: #New node
-        
-            if prob > self.v_max:
-                self.v_max = prob
-                self.v_thr = prob - self.v_abeam
-                self.v_maxh = hmmnode.hyp
-
-            if not full:
-                hmm_nodes1.append(hmmnode)
-                cur_pos = len(hmm_nodes1) - 1
-
-                self.heap_push(hmm_nodes1_heap, (prob, cur_pos), self.NEW)
-            
-                hmm_actives[hmmnode.id] = cur_pos  
-            else:
-                #Remove an old node...
-                _, pos_worse_node = heapq.heappop(hmm_nodes1_heap)
-
-                hmm_actives[(hmm_nodes1[pos_worse_node].s,hmm_nodes1[pos_worse_node].q)] = -1
-                #I am keeping the old node in the hmm_nodes1 list
-                #If I remove the node, I should do something with the positions...
-
-                #Adding the new one
-                hmm_nodes1.append(hmmnode)
-                cur_pos = len(hmm_nodes1) - 1
-                self.heap_push(hmm_nodes1_heap, (prob, cur_pos), self.NEW)
-
-                hmm_actives[hmmnode.id] = cur_pos
-
-        else: #Old node, should we update its value?
-            
-            cur_node = hmm_nodes1[pos]
-
-            if cur_node.p > prob:
-                return
-            else:
-                if prob > self.v_max:
-                    
-                    self.v_max = prob
-                    self.v_thr = prob - self.v_abeam
-                    self.v_maxh = hmmnode.hyp
-
-                cur_node.p = prob
-                cur_node.hmmp = hmmnode.hmmp
-                self.heap_push(hmm_nodes1_heap, (cur_node.p, pos), self.UPDATE)
 
     def update_lm_beam(self, value):
-
         self.v_lm_max = value
         self.v_lm_thr = value - self.v_lm_beam
 
     def insert_sg_node(self, node):
-
         actives = self.actives
-        sg_state = self.sg.get_state_info(node.s)
+        sym = self.sg.get_state_sym(node.s)
+        word = self.sg.get_state_word(node.s)
         #Is this a word node?
-        insert_word = True if sg_state[2] != '-' and sg_state[2] != '>' else False
+        insert_word = True if word != '-' and word != '>' else False
         
         #Is this a symbol node? 
-        if sg_state[1] == '-':
+        if sym == '-':
             # Still not symbol node, null_nodes1
             nodes1 = self.sg_null_nodes1
         else:
@@ -436,7 +485,7 @@ class Decoder(object):
             nodes1.append(node)
             # If this is a word node, restart and manage hypothesis
             if insert_word:
-                hyp = self.wordHyp(node.hyp, sg_state[2])
+                hyp = self.wordHyp(node.hyp, word)
                 self.hyp_lst.append(hyp)
                 node.hyp = len(self.hyp_lst) - 1
                 node.hmmp = 0.0
@@ -477,6 +526,8 @@ class Decoder(object):
 
         self.hyp_lst = []
 
+        self.hmm_node_manager = HMMNodeManager(self.nmaxhyp)
+
         self.hyp_lst.append(self.wordHyp(-1,""))
 
         self.final_iter = False
@@ -494,14 +545,16 @@ class Decoder(object):
         for i in range(1,t_max):
             t_fea = fea.sample[:,i]
             self.viterbi(t_fea,i)
-            
+            fprob += self.v_max
+
         self.final_iter = True
         self.viterbi(None,i)
 
         sentence = self.get_max_hyp()
-
-        logging.info("Recognised: {}".format(sentence))
-
+        print("{}".format(sentence))
+        logging.info("Recognised: {:.1f} {}".format(fprob, sentence))
+   
+        
 if __name__=="__main__":
 
    logging.basicConfig(filename='deco.info.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -511,8 +564,8 @@ if __name__=="__main__":
    amodel = pickle.load( open("../models/monophone_model_I32.p", "rb"))
    sg = pickle.load( open("../models/2.graph.p","rb"))
 
-   from utils.TLSample import TLSample
    sample = TLSample("../samples/AAFA0016.features")
    decoder = Decoder(amodel, sg)
    decoder.nmaxhyp = 20
    decoder.decode(sample)
+   

@@ -15,6 +15,12 @@ class SGraphModel(object):
         self.word_id = 0
         self.read_model(model_path)
 
+    def get_state_sym(self, state_id):
+        return self.id_to_sym[self.state_sym[state_id]]
+
+    def get_state_word(self, state_id):
+        return self.id_to_word[self.state_word[state_id]]
+
     def get_state_info(self, state_id):
         sym, word, edge_begin, edge_end = self.id_to_sym[self.state_sym[state_id]], \
             self.id_to_word[self.state_word[state_id]], self.edges_begin[state_id], self.edges_end[state_id]
