@@ -37,11 +37,7 @@ class GaussianMixtureTrans(object):
        
 class AModel(object):
 
-
-
     def __init__(self, model_type, model_path):
-
-        
 
         if model_type != "TiedStates" and model_type != "Mixture":
             raise Exception("Not implemented yet")
@@ -53,6 +49,8 @@ class AModel(object):
         self.gms_dict = {}
         self.trans_dict = {}
         self.load_model(model_type, model_path)
+
+        self.reset_cache()
 
     def reset_cache(self):
         self.cache = {}
